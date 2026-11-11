@@ -24,3 +24,21 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Natywne kontrolki (listy rozwijane, kalendarz w polu daty) w kolorach motywu.
+   Bez tego w trybie ciemnym rozwinięta lista miała białe tło i jasny tekst. */
+:root {
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
+select,
+option {
+  background-color: var(--background);
+  color: var(--foreground);
+}
