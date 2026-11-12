@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getFormOptions, getOpportunityFormValues } from "@/lib/data";
 import { OpportunityForm } from "../../opportunity-form";
+import { DeleteOpportunityButton } from "../../delete-button";
 
 type Params = Promise<{ id: string }>;
 
@@ -37,5 +38,12 @@ async function EditOpportunityForm({ params }: { params: Params }) {
     snapshotUrl = data?.signedUrl ?? null;
   }
 
-  return <OpportunityForm opportunityId={id} initial={initial} snapshotUrl={snapshotUrl} {...options} />;
+  return (
+    <>
+      <OpportunityForm opportunityId={id} initial={initial} snapshotUrl={snapshotUrl} {...options} />
+      <div className="border-t border-gray-200 pt-4">
+        <DeleteOpportunityButton opportunityId={id} />
+      </div>
+    </>
+  );
 }

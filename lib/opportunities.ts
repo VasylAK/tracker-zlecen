@@ -92,3 +92,13 @@ export function addDays(isoDate: string, days: number) {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
+
+// Polskie nazwy ścieżek etapów (kody z kolumny pipeline).
+export const PIPELINE_LABELS: Record<Pipeline, string> = {
+  recruitment: "Rekrutacja",
+  service_sales: "Sprzedaż usług",
+};
+
+export function typeLabel(type: OpportunityType) {
+  return OPPORTUNITY_TYPES.find((t) => t.code === type)?.label ?? type;
+}

@@ -4,7 +4,16 @@
 // więc RLS przepuszcza tylko zalogowanego. Pliki są już w Storage: dostajemy same ścieżki.
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { formatContact, isOpportunityType, normalizeUrl, pipelineFor } from "@/lib/opportunities";
+import {
+  DEFAULT_NEXT_STEP,
+  FOLLOW_UP_DAYS,
+  addDays,
+  formatContact,
+  isOpportunityType,
+  normalizeUrl,
+  pipelineFor,
+} from "@/lib/opportunities";
+import { todayInWarsaw } from "@/lib/data";
 
 export type SaveResult = { ok: true } | { ok: false; error: string };
 
@@ -158,4 +167,140 @@ function isSafePath(path: string, prefix: string) {
 function fileNameFromPath(path: string) {
   const file = path.split("/").pop() ?? path;
   return file.replace(/^[0-9a-f-]{36}-/i, "").replace(/\.[^.]+$/, "");
+}
+
+// Zmiana etapu prosto z listy: aktualizacja szansy + wpis w stage_history.
+export async function changeStage(id: string, stageId: string): Promise<SaveResult> {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getClaims();
+  if (!auth?.claims) return fail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const [{ data: opportunity }, { data: stage }] = await Promise.all([
+    supabase
+      .from("opportunities")
+      .select("type, stage_id, next_step, next_step_at")
+      .eq("id", id)
+      .is("deleted_at", null)
+      .maybeSingle(),
+    supabase
+      .from("opportunity_stages")
+      .select("pipeline, outcome")
+      .eq("id", stageId)
+      .is("deleted_at", null)
+      .maybeSingle(),
+  ]);
+  if (!opportunity) return fail("Nie znaleziono aplikacji.");
+  if (!stage) return fail("Nie znaleziono etapu.");
+  if (opportunity.stage_id === stageId) return { ok: true };
+  if (!isOpportunityType(opportunity.type) || stage.pipeline !== pipelineFor(opportunity.type)) {
+    return fail("Etap nie pasuje do typu aplikacji.");
+  }
+
+  // Otwarty etap wymaga następnego kroku: jeśli go brak (np. powrót z "Odrzucone"),
+  // ustawiamy domyślny follow-up za 7 dni, żeby aplikacja nie wypadła z "Do zrobienia dziś".
+  // Etap zamykający czyści następny krok (zamknięta aplikacja nie ma follow-upu).
+  const update: Record<string, string | null> = { stage_id: stageId };
+  if (stage.outcome === "open") {
+    if (!opportunity.next_step) update.next_step = DEFAULT_NEXT_STEP;
+    if (!opportunity.next_step_at) update.next_step_at = addDays(todayInWarsaw(), FOLLOW_UP_DAYS);
+  } else {
+    update.next_step = null;
+    update.next_step_at = null;
+  }
+
+  const { error } = await supabase.from("opportunities").update(update).eq("id", id);
+  if (error) return fail(`Nie udało się zmienić etapu: ${error.message}`);
+
+  const { error: historyError } = await supabase
+    .from("stage_history")
+    .insert({ opportunity_id: id, stage_id: stageId });
+  if (historyError) return fail(`Etap zmieniony, ale bez historii: ${historyError.message}`);
+
+  revalidatePath("/");
+  return { ok: true };
+}
+
+// Panel "Zrobione" / "Następny krok": albo planuję kolejny krok (etap otwarty + dowolna data),
+// albo zamykam aplikację etapem zamykającym (wygrana / przegrana / brak odpowiedzi itd.).
+// Zamknięcie czyści następny krok, więc aplikacja znika z "Do zrobienia dziś".
+export type NextStepInput = {
+  stageId: string;
+  nextStep: string;
+  nextStepAt: string; // YYYY-MM-DD; ignorowane przy zamknięciu
+  note: string; // trafia do stage_history, gdy etap się zmienia
+};
+
+export async function updateNextStep(id: string, input: NextStepInput): Promise<SaveResult> {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getClaims();
+  if (!auth?.claims) return fail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const [{ data: opportunity }, { data: stage }] = await Promise.all([
+    supabase
+      .from("opportunities")
+      .select("type, stage_id")
+      .eq("id", id)
+      .is("deleted_at", null)
+      .maybeSingle(),
+    supabase
+      .from("opportunity_stages")
+      .select("pipeline, outcome")
+      .eq("id", input.stageId)
+      .is("deleted_at", null)
+      .maybeSingle(),
+  ]);
+  if (!opportunity) return fail("Nie znaleziono aplikacji.");
+  if (!stage) return fail("Wybierz etap.");
+  if (!isOpportunityType(opportunity.type) || stage.pipeline !== pipelineFor(opportunity.type)) {
+    return fail("Etap nie pasuje do typu aplikacji.");
+  }
+
+  const open = stage.outcome === "open";
+  const nextStep = input.nextStep.trim();
+  const nextStepAt = input.nextStepAt.trim();
+  if (open) {
+    if (!nextStep) return fail("Wpisz, co jest następnym krokiem.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(nextStepAt)) return fail("Wybierz datę następnego kroku.");
+    if (nextStepAt < todayInWarsaw()) return fail("Data następnego kroku nie może być w przeszłości.");
+  }
+
+  const { error } = await supabase
+    .from("opportunities")
+    .update({
+      stage_id: input.stageId,
+      next_step: open ? nextStep : null,
+      next_step_at: open ? nextStepAt : null,
+    })
+    .eq("id", id);
+  if (error) return fail(`Nie udało się zapisać: ${error.message}`);
+
+  if (opportunity.stage_id !== input.stageId) {
+    const { error: historyError } = await supabase
+      .from("stage_history")
+      .insert({ opportunity_id: id, stage_id: input.stageId, note: input.note.trim() || null });
+    if (historyError) return fail(`Zapisano, ale bez historii etapu: ${historyError.message}`);
+  }
+
+  revalidatePath("/");
+  return { ok: true };
+}
+
+// Usunięcie = ustawienie deleted_at (Standard modułu): wiersz znika z aplikacji, ale zostaje w bazie,
+// więc pomyłkę da się cofnąć w SQL, a historia etapów i pliki w Storage pozostają spójne.
+export async function deleteOpportunity(id: string): Promise<SaveResult> {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getClaims();
+  if (!auth?.claims) return fail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const { data, error } = await supabase
+    .from("opportunities")
+    .update({ deleted_at: new Date().toISOString() })
+    .eq("id", id)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) return fail(`Nie udało się usunąć: ${error.message}`);
+  if (!data?.length) return fail("Nie znaleziono aplikacji.");
+
+  revalidatePath("/");
+  return { ok: true };
 }
