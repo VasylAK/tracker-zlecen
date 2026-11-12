@@ -1,5 +1,6 @@
 // Edycja aplikacji: ten sam formularz, wypełniony danymi z bazy.
 import { Suspense } from "react";
+import { AppHeader } from "../../../app-header";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getFormOptions, getOpportunityFormValues } from "@/lib/data";
@@ -10,12 +11,15 @@ type Params = Promise<{ id: string }>;
 
 export default function EditOpportunityPage({ params }: { params: Params }) {
   return (
-    <main className="mx-auto w-full max-w-2xl space-y-6 p-4">
-      <h1 className="text-2xl font-semibold">Edycja aplikacji</h1>
-      <Suspense fallback={<p>Ładowanie aplikacji…</p>}>
-        <EditOpportunityForm params={params} />
-      </Suspense>
-    </main>
+    <>
+      <AppHeader />
+      <main className="mx-auto w-full max-w-2xl space-y-6 p-4">
+        <h1 className="text-2xl font-semibold">Edycja aplikacji</h1>
+        <Suspense fallback={<p>Ładowanie aplikacji…</p>}>
+          <EditOpportunityForm params={params} />
+        </Suspense>
+      </main>
+    </>
   );
 }
 

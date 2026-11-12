@@ -17,30 +17,20 @@ import {
 } from "@/lib/list";
 import { pipelineFor, typeLabel, type Source, type Stage } from "@/lib/opportunities";
 import { ListFilterBar, NextStepPanel, StageSelect } from "./list-controls";
-import { signOut } from "./login/actions";
+import { AppHeader } from "./app-header";
 
 type SearchParams = PageProps<"/">["searchParams"];
 
 export default function Page({ searchParams }: PageProps<"/">) {
   return (
-    <main className="mx-auto w-full max-w-5xl space-y-8 p-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Tracker Zleceń</h1>
-        <div className="flex gap-2">
-          <Link href="/opportunities/new" className="rounded bg-black px-4 py-2 font-medium text-white">
-            Nowa aplikacja
-          </Link>
-          <form action={signOut}>
-            <button type="submit" className="rounded border border-gray-300 px-4 py-2">
-              Wyloguj
-            </button>
-          </form>
-        </div>
-      </header>
-      <Suspense fallback={<p>Ładowanie aplikacji…</p>}>
-        <Dashboard searchParams={searchParams} />
-      </Suspense>
-    </main>
+    <>
+      <AppHeader />
+      <main className="mx-auto w-full max-w-5xl space-y-8 p-4">
+        <Suspense fallback={<p>Ładowanie aplikacji…</p>}>
+          <Dashboard searchParams={searchParams} />
+        </Suspense>
+      </main>
+    </>
   );
 }
 
