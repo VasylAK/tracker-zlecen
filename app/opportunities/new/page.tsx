@@ -1,6 +1,7 @@
 // Nowa aplikacja. Odczyt sesji i słowników jest w <Suspense>, bo przy cacheComponents
 // dane z żądania (ciasteczka) nie mogą trafić do statycznej "skorupy" strony.
 import { Suspense } from "react";
+import { connection } from "next/server";
 import { AppHeader } from "../../app-header";
 import { createClient } from "@/lib/supabase/server";
 import { emptyFormValues, getFormOptions, todayInWarsaw } from "@/lib/data";
@@ -21,6 +22,8 @@ export default function NewOpportunityPage() {
 }
 
 async function NewOpportunityForm() {
+  // Domyślna data wysłania = dziś, liczona przy każdym wejściu.
+  await connection();
   const supabase = await createClient();
   const options = await getFormOptions(supabase);
   return <OpportunityForm opportunityId={null} initial={emptyFormValues(todayInWarsaw())} {...options} />;

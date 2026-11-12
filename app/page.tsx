@@ -2,6 +2,7 @@
 // Odczyt adresu, sesji i danych jest w <Suspense> (wymóg cacheComponents, jak w formularzu).
 import { Suspense } from "react";
 import Link from "next/link";
+import { connection } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { todayInWarsaw } from "@/lib/data";
 import {
@@ -35,6 +36,8 @@ export default function Page({ searchParams }: PageProps<"/">) {
 }
 
 async function Dashboard({ searchParams }: { searchParams: SearchParams }) {
+  // "Dziś" liczymy przy każdym wejściu, a nie raz przy budowaniu strony.
+  await connection();
   const filters = parseFilters(await searchParams);
 
   const supabase = await createClient();
