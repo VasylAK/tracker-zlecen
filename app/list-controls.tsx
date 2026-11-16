@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import {
   DEFAULT_NEXT_STEP,
   FOLLOW_UP_DAYS,
+  OPPORTUNITY_TYPES,
   PIPELINE_LABELS,
   addDays,
   type Pipeline,
@@ -19,7 +20,7 @@ import { changeStage, updateNextStep } from "./opportunities/actions";
 const selectClass = "rounded border border-gray-300 px-2 py-1 text-sm disabled:opacity-50";
 const PIPELINES: Pipeline[] = ["recruitment", "service_sales"];
 
-// Pasek filtrów listy. Stan trzymamy w adresie (?etap=&q=&zrodlo=&od=&do=), więc działa
+// Pasek filtrów listy. Stan trzymamy w adresie (?etap=&typ=&q=&zrodlo=&od=&do=), więc działa
 // "wstecz", odświeżenie i zakładki. Listy i daty działają od razu, tekst po 300 ms przerwy w pisaniu.
 export function ListFilterBar({
   filters,
@@ -43,7 +44,7 @@ export function ListFilterBar({
   const field = "space-y-1 text-sm";
 
   return (
-    <div className={`grid gap-2 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1.2fr_auto_auto_auto] md:items-end ${pending ? "opacity-70" : ""}`}>
+    <div className={`grid gap-2 sm:grid-cols-2 md:grid-cols-[2fr_1fr_1fr_1.2fr_auto_auto_auto] md:items-end ${pending ? "opacity-70" : ""}`}>
       <label className={field}>
         <span className="text-gray-500">Szukaj</span>
         <input
@@ -58,6 +59,22 @@ export function ListFilterBar({
             timer.current = setTimeout(() => apply({ ...filters, q: value }), 300);
           }}
         />
+      </label>
+      <label className={field}>
+        <span className="text-gray-500">Typ</span>
+        <select
+          value={filters.type}
+          className={`${selectClass} w-full`}
+          onChange={(e) => apply({ ...filters, q, type: e.target.value })}
+        >
+          <option value="">Wszystkie</option>
+          <option value="recruitment">Etat + B2B</option>
+          {OPPORTUNITY_TYPES.map((t) => (
+            <option key={t.code} value={t.code}>
+              {t.label}
+            </option>
+          ))}
+        </select>
       </label>
       <label className={field}>
         <span className="text-gray-500">Źródło</span>

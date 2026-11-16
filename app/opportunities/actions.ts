@@ -196,11 +196,23 @@ export async function changeStage(id: string, stageId: string): Promise<SaveResu
     return fail("Etap nie pasuje do typu aplikacji.");
   }
 
-  // Otwarty etap wymaga następnego kroku: jeśli go brak (np. powrót z "Odrzucone"),
-  // ustawiamy domyślny follow-up za 7 dni, żeby aplikacja nie wypadła z "Do zrobienia dziś".
-  // Etap zamykający czyści następny krok (zamknięta aplikacja nie ma follow-upu).
+  const result = await moveToStage(supabase, { id, next_step: opportunity.next_step, next_step_at: opportunity.next_step_at }, stageId, stage.outcome);
+  if (!result.ok) return result;
+
+  revalidatePath("/");
+  return { ok: true };
+}
+
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+type StageTarget = { id: string; next_step: string | null; next_step_at: string | null };
+
+// Wspólne dla zmiany etapu w wierszu i operacji masowej: aktualizacja szansy + wpis w stage_history.
+// Otwarty etap wymaga następnego kroku: jeśli go brak (np. powrót z "Odrzucone"),
+// ustawiamy domyślny follow-up za 7 dni, żeby aplikacja nie wypadła z "Do zrobienia dziś".
+// Etap zamykający czyści następny krok (zamknięta aplikacja nie ma follow-upu).
+async function moveToStage(supabase: Supabase, opportunity: StageTarget, stageId: string, outcome: string): Promise<SaveResult> {
   const update: Record<string, string | null> = { stage_id: stageId };
-  if (stage.outcome === "open") {
+  if (outcome === "open") {
     if (!opportunity.next_step) update.next_step = DEFAULT_NEXT_STEP;
     if (!opportunity.next_step_at) update.next_step_at = addDays(todayInWarsaw(), FOLLOW_UP_DAYS);
   } else {
@@ -208,15 +220,13 @@ export async function changeStage(id: string, stageId: string): Promise<SaveResu
     update.next_step_at = null;
   }
 
-  const { error } = await supabase.from("opportunities").update(update).eq("id", id);
+  const { error } = await supabase.from("opportunities").update(update).eq("id", opportunity.id);
   if (error) return fail(`Nie udało się zmienić etapu: ${error.message}`);
 
   const { error: historyError } = await supabase
     .from("stage_history")
-    .insert({ opportunity_id: id, stage_id: stageId });
+    .insert({ opportunity_id: opportunity.id, stage_id: stageId });
   if (historyError) return fail(`Etap zmieniony, ale bez historii: ${historyError.message}`);
-
-  revalidatePath("/");
   return { ok: true };
 }
 
@@ -303,4 +313,104 @@ export async function deleteOpportunity(id: string): Promise<SaveResult> {
 
   revalidatePath("/");
   return { ok: true };
+}
+
+// ---------- Operacje masowe (krok 7) ----------
+// Każda przyjmuje listę id zaznaczonych na liście i zwraca podsumowanie:
+// done = zapisane, skipped = pominięte (inna ścieżka, zamknięte, już usunięte), errors = błędy zapisu.
+export type BulkResult = { ok: true; done: number; skipped: number; errors: string[] } | { ok: false; error: string };
+
+const MAX_BULK = 200;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const bulkFail = (error: string): BulkResult => ({ ok: false, error });
+
+// Server Action to publiczny adres: nie ufamy temu, co przyszło z przeglądarki.
+function validIds(ids: unknown): ids is string[] {
+  return Array.isArray(ids) && ids.length > 0 && ids.length <= MAX_BULK && ids.every((id) => typeof id === "string" && UUID.test(id));
+}
+
+async function bulkClient() {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getClaims();
+  return auth?.claims ? supabase : null;
+}
+
+export async function bulkChangeStage(ids: string[], stageId: string): Promise<BulkResult> {
+  if (!validIds(ids) || !UUID.test(stageId)) return bulkFail("Nieprawidłowe zaznaczenie.");
+  const supabase = await bulkClient();
+  if (!supabase) return bulkFail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const [{ data: stage }, { data: rows, error }] = await Promise.all([
+    supabase.from("opportunity_stages").select("pipeline, outcome").eq("id", stageId).is("deleted_at", null).maybeSingle(),
+    supabase.from("opportunities").select("id, type, stage_id, next_step, next_step_at").in("id", ids).is("deleted_at", null),
+  ]);
+  if (!stage) return bulkFail("Nie znaleziono etapu.");
+  if (error) return bulkFail(`Nie udało się wczytać aplikacji: ${error.message}`);
+
+  let done = 0;
+  let skipped = ids.length - (rows?.length ?? 0);
+  const errors: string[] = [];
+  // Po kolei, bo każda zmiana to dwa zapisy (szansa + historia); przy kilkunastu wierszach to ułamek sekundy
+  for (const row of rows ?? []) {
+    const fits = isOpportunityType(row.type) && pipelineFor(row.type) === stage.pipeline;
+    if (!fits || row.stage_id === stageId) {
+      skipped++;
+      continue;
+    }
+    const result = await moveToStage(supabase, row, stageId, stage.outcome);
+    if (result.ok) done++;
+    else errors.push(result.error);
+  }
+
+  revalidatePath("/");
+  return { ok: true, done, skipped, errors };
+}
+
+// Ustawia datę następnego kroku tylko otwartym aplikacjom; brakujący opis kroku → "Follow-up".
+export async function bulkSetNextStepAt(ids: string[], date: string): Promise<BulkResult> {
+  if (!validIds(ids)) return bulkFail("Nieprawidłowe zaznaczenie.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return bulkFail("Wybierz datę follow-upu.");
+  if (date < todayInWarsaw()) return bulkFail("Data follow-upu nie może być w przeszłości.");
+  const supabase = await bulkClient();
+  if (!supabase) return bulkFail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const { data, error } = await supabase
+    .from("opportunities")
+    .select("id, opportunity_stages(outcome)")
+    .in("id", ids)
+    .is("deleted_at", null);
+  if (error) return bulkFail(`Nie udało się wczytać aplikacji: ${error.message}`);
+  const rows = (data ?? []) as unknown as { id: string; opportunity_stages: { outcome: string } | null }[];
+  const openIds = rows.filter((r) => r.opportunity_stages?.outcome === "open").map((r) => r.id);
+  const skipped = ids.length - openIds.length;
+  if (openIds.length === 0) return { ok: true, done: 0, skipped, errors: [] };
+
+  const { error: dateError } = await supabase.from("opportunities").update({ next_step_at: date }).in("id", openIds);
+  if (dateError) return bulkFail(`Nie udało się zapisać daty: ${dateError.message}`);
+  const { error: stepError } = await supabase
+    .from("opportunities")
+    .update({ next_step: DEFAULT_NEXT_STEP })
+    .in("id", openIds)
+    .is("next_step", null);
+
+  revalidatePath("/");
+  return { ok: true, done: openIds.length, skipped, errors: stepError ? [stepError.message] : [] };
+}
+
+// Usunięcie = deleted_at, jak przy pojedynczej aplikacji.
+export async function bulkDelete(ids: string[]): Promise<BulkResult> {
+  if (!validIds(ids)) return bulkFail("Nieprawidłowe zaznaczenie.");
+  const supabase = await bulkClient();
+  if (!supabase) return bulkFail("Sesja wygasła. Zaloguj się ponownie.");
+
+  const { data, error } = await supabase
+    .from("opportunities")
+    .update({ deleted_at: new Date().toISOString() })
+    .in("id", ids)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) return bulkFail(`Nie udało się usunąć: ${error.message}`);
+
+  revalidatePath("/");
+  return { ok: true, done: data?.length ?? 0, skipped: ids.length - (data?.length ?? 0), errors: [] };
 }

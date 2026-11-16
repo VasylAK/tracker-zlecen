@@ -2,7 +2,7 @@
 // Jedno zapytanie pobiera wszystkie aplikacje, a filtrujemy w pamięci:
 // przy jednym użytkowniku i kilkudziesięciu wpisach to prostsze i szybsze niż kilka zapytań.
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { OpportunityType, Source, Stage } from "./opportunities";
+import { isOpportunityType, pipelineFor, type OpportunityType, type Source, type Stage } from "./opportunities";
 
 export type ListRow = {
   id: string;
@@ -48,29 +48,33 @@ export async function getListData(supabase: SupabaseClient) {
   };
 }
 
-// Filtry listy zapisane w adresie, np. /?etap=all&q=allegro&zrodlo=<id>&od=2026-11-01&do=2026-11-30
+// Filtry listy zapisane w adresie, np. /?etap=all&typ=recruitment&q=allegro&zrodlo=<id>&od=2026-11-01&do=2026-11-30
 export type ListFilters = {
   stage: string; // "open" (domyślnie), "all", "closed" albo id etapu
   q: string; // szukany tekst: firma, stanowisko, kontakt, źródło
+  type: string; // "" (wszystkie), "recruitment" (Etat + B2B) albo kod typu, np. "freelance"
   source: string; // id źródła albo ""
   from: string; // wysłano od (YYYY-MM-DD) albo ""
   to: string; // wysłano do (YYYY-MM-DD) albo ""
 };
 
-export const DEFAULT_FILTERS: ListFilters = { stage: "open", q: "", source: "", from: "", to: "" };
+export const DEFAULT_FILTERS: ListFilters = { stage: "open", q: "", type: "", source: "", from: "", to: "" };
 
 type RawParams = Record<string, string | string[] | undefined>;
 
 export function parseFilters(params: RawParams): ListFilters {
   const one = (key: string) => (typeof params[key] === "string" ? (params[key] as string).trim() : "");
   const date = (key: string) => (/^\d{4}-\d{2}-\d{2}$/.test(one(key)) ? one(key) : "");
-  return { stage: one("etap") || "open", q: one("q"), source: one("zrodlo"), from: date("od"), to: date("do") };
+  // Nieznany typ w adresie traktujemy jak "wszystkie", żeby literówka nie dawała pustej listy
+  const type = one("typ") === "recruitment" || isOpportunityType(one("typ")) ? one("typ") : "";
+  return { stage: one("etap") || "open", q: one("q"), type, source: one("zrodlo"), from: date("od"), to: date("do") };
 }
 
 // Ta sama mapa w drugą stronę: używa jej pasek filtrów w przeglądarce.
 export function filtersToQuery(f: ListFilters) {
   const params = new URLSearchParams();
   if (f.stage !== "open") params.set("etap", f.stage);
+  if (f.type) params.set("typ", f.type);
   if (f.q.trim()) params.set("q", f.q.trim());
   if (f.source) params.set("zrodlo", f.source);
   if (f.from) params.set("od", f.from);
@@ -88,6 +92,8 @@ export function applyFilters(rows: ListRow[], f: ListFilters) {
     if (f.stage === "open" && outcome !== "open") return false;
     if (f.stage === "closed" && outcome === "open") return false;
     if (!["open", "closed", "all"].includes(f.stage) && r.stage_id !== f.stage) return false;
+    if (f.type === "recruitment" && pipelineFor(r.type) !== "recruitment") return false;
+    if (f.type && f.type !== "recruitment" && r.type !== f.type) return false;
     if (f.source && r.source_id !== f.source) return false;
     // Przedział dat: aplikacje bez daty wysłania ("Do wysłania") odpadają, gdy przedział jest ustawiony
     if (f.from && (!r.submitted_at || r.submitted_at < f.from)) return false;

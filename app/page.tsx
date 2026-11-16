@@ -12,6 +12,7 @@ import {
   formatDate,
   getListData,
   lateLabel,
+  filtersToQuery,
   parseFilters,
   type ListFilters,
   type ListRow,
@@ -19,6 +20,7 @@ import {
 import { pipelineFor, typeLabel, type Source, type Stage } from "@/lib/opportunities";
 import { ListFilterBar, NextStepPanel, StageSelect } from "./list-controls";
 import { AppHeader } from "./app-header";
+import { BulkBar, RowCheckbox, SelectAll, SelectionProvider } from "./bulk-actions";
 
 type SearchParams = PageProps<"/">["searchParams"];
 
@@ -150,9 +152,19 @@ function ListSection({
       ) : rows.length === 0 ? (
         <p className="text-gray-600">Brak aplikacji dla tych filtrów.</p>
       ) : (
+        // key z filtrów: zmiana filtra zaczyna zaznaczanie od zera
+        <SelectionProvider
+          key={filtersToQuery(filters)}
+          items={rows.map((r) => ({
+            id: r.id,
+            pipeline: pipelineFor(r.type),
+            open: r.opportunity_stages?.outcome === "open",
+          }))}
+        >
+        <SelectAll />
         <div className="rounded border border-gray-200">
           <div className={`hidden gap-3 border-b border-gray-200 p-3 text-sm font-medium text-gray-500 md:grid ${COLUMNS}`}>
-            <span>Firma i stanowisko</span>
+            <span className="pl-6">Firma i stanowisko</span>
             <span>Źródło</span>
             <span>Etap</span>
             <span>Wysłano</span>
@@ -165,11 +177,14 @@ function ListSection({
               const overdue = open && !!row.next_step_at && row.next_step_at < today;
               return (
                 <li key={row.id} className={`grid grid-cols-1 gap-2 p-3 md:items-center md:gap-3 ${COLUMNS}`}>
-                  <div className="min-w-0">
-                    <p className="truncate font-medium">{row.company}</p>
-                    <p className="truncate text-sm text-gray-600">
-                      {row.title} · {typeLabel(row.type)}
-                    </p>
+                  <div className="flex min-w-0 items-start gap-2">
+                    <RowCheckbox id={row.id} label={`${row.company} · ${row.title}`} />
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{row.company}</p>
+                      <p className="truncate text-sm text-gray-600">
+                        {row.title} · {typeLabel(row.type)}
+                      </p>
+                    </div>
                   </div>
                   <p className="text-sm">
                     <span className="text-gray-500 md:hidden">Źródło: </span>
@@ -192,6 +207,8 @@ function ListSection({
             })}
           </ul>
         </div>
+        <BulkBar stages={stages} today={today} />
+        </SelectionProvider>
       )}
     </section>
   );
